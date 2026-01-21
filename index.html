@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLL Judge Timer</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-100 overflow-hidden">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const PHASES = [
+            { id: 1, title: "Intro", subtitle: "Príprava materiálov, úvodná konverzácia", duration: 120, color: "#3b82f6", type: "intro" },
+            { id: 2, title: "Projekt", subtitle: "Prezentácia tímu", duration: 300, color: "#f97316", type: "project" },
+            { id: 3, title: "Projekt Otázky", subtitle: "Otázky a odpovede", duration: 300, color: "#ea580c", type: "project_qa" },
+            { id: 4, title: "Návrh robota", subtitle: "Vysvetlenie tímu", duration: 300, color: "#6366f1", type: "robot" },
+            { id: 5, title: "Robot Otázky", subtitle: "Otázky a odpovede", duration: 300, color: "#4f46e5", type: "robot_qa" },
+            { id: 6, title: "Feedback", subtitle: "Záverečné zdieľanie a spätná väzba", duration: 480, color: "#16a34a", type: "feedback" },
+            { id: 7, title: "Porada", subtitle: "Tím odchádza, vypĺňanie hárkov", duration: 600, color: "#334155", type: "deliberation" }
+        ];
+
+        const TOTAL_DURATION = PHASES.reduce((acc, p) => acc + p.duration, 0);
+        const PHASE_STARTS = PHASES.reduce((acc, p, i) => {
+            if (i === 0) return [0];
+            acc.push(acc[i - 1] + PHASES[i - 1].duration);
+            return acc;
+        }, []);
+
+        const App = () => {
+            const [totalSeconds, setTotalSeconds] = useState(0);
+            const [isActive, setIsActive] = useState(false);
+            const timerRef = useRef(null);
+            const audioCtx = useRef(null);
+            const timelineRef = useRef(null);
+
+            const getCurrentInfo = (time) => {
+                let acc = 0;
+                for (let i = 0; i < PHASES.length; i++) {
+                    acc += PHASES[i].duration;
+                    if (time < acc) return { index: i, phase: PHASES[i], timeLeft: acc - time, start: acc - PHASES[i].duration, end: acc };
+                }
+                return { index: PHASES.length - 1, phase: PHASES[PHASES.length - 1], timeLeft: 0, start: TOTAL_DURATION - PHASES[PHASES.length-1].duration, end: TOTAL_DURATION };
+            };
+
+            const info = getCurrentInfo(totalSeconds);
+
+            const beep = (freq, dur, count = 1) => {
+                if (!audioCtx.current) audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.current.state === 'suspended') audioCtx.current.resume();
+                for (let i = 0; i < count; i++) {
+                    setTimeout(() => {
+                        const osc = audioCtx.current.createOscillator();
+                        const g = audioCtx.current.createGain();
+                        osc.frequency.setValueAtTime(freq, audioCtx.current.currentTime);
+                        g.gain.exponentialRampToValueAtTime(0.01, audioCtx.current.currentTime + dur);
+                        osc.connect(g); g.connect(audioCtx.current.destination);
+                        osc.start(); osc.stop(audioCtx.current.currentTime + dur);
+                    }, i * 300);
+                }
+            };
+
+            useEffect(() => {
+                if (isActive && totalSeconds < TOTAL_DURATION) {
+                    timerRef.current = setInterval(() => {
+                        setTotalSeconds(prev => {
+                            const next = prev + 1;
+                            const current = getCurrentInfo(next);
+                            const old = getCurrentInfo(prev);
+                            if (current.index !== old.index) beep(880, 0.5, 2);
+                            if (current.timeLeft === 60 && (current.phase.type === 'project' || current.phase.type === 'robot')) beep(440, 0.3);
+                            if (next >= TOTAL_DURATION) { setIsActive(false); beep(880, 0.5, 3); }
+                            return next;
+                        });
+                    }, 1000);
+                } else clearInterval(timerRef.current);
+                return () => clearInterval(timerRef.current);
+            }, [isActive, totalSeconds]);
+
+            const fmt = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+
+            return (
+                <div className="flex flex-col h-screen select-none font-sans">
+                    <div ref={timelineRef} className="relative h-20 w-full flex cursor-pointer bg-slate-800" onClick={(e) => {
+                        const rect = timelineRef.current.getBoundingClientRect();
+                        setTotalSeconds(Math.floor(((e.clientX - rect.left) / rect.width) * TOTAL_DURATION));
+                    }}>
+                        {PHASES.map((p, i) => (
+                            <div key={p.id} className="h-full border-r border-white/10 flex items-center justify-center text-center px-1"
+                                 style={{ width: `${(p.duration / TOTAL_DURATION) * 100}%`, backgroundColor: p.color, filter: totalSeconds >= PHASE_STARTS[i] + p.duration ? 'brightness(0.3)' : 'none' }}>
+                                <span className="text-[10px] font-bold text-white uppercase">{p.title}</span>
+                            </div>
+                        ))}
+                        <div className="absolute top-0 bottom-0 w-1 bg-white shadow-xl z-20" style={{ left: `${(totalSeconds / TOTAL_DURATION) * 100}%` }} />
+                    </div>
+
+                    <div className="flex-1 flex flex-col justify-center items-center relative transition-colors duration-700" style={{ backgroundColor: info.phase.color }}>
+                        <div className="absolute top-6 right-6 bg-black/20 px-4 py-2 rounded-full text-white font-mono text-sm">
+                            CELKOM: {fmt(totalSeconds)} / {fmt(TOTAL_DURATION)}
+                        </div>
+                        <div className="text-center text-white px-4">
+                            <h2 className="text-3xl font-light uppercase tracking-tighter opacity-80">{info.phase.title}</h2>
+                            <p className="text-xl font-bold mb-8">{info.phase.subtitle}</p>
+                            <div className="text-[30vh] font-mono font-black leading-none drop-shadow-2xl">{fmt(info.timeLeft)}</div>
+                        </div>
+                        <div className="absolute bottom-12 flex items-center gap-12">
+                            <button onClick={() => totalSeconds - info.start > 3 ? setTotalSeconds(info.start) : setTotalSeconds(PHASE_STARTS[info.index - 1] || 0)} className="text-white opacity-80 hover:opacity-100">
+                                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
+                            </button>
+                            <button onClick={() => { if(!audioCtx.current) beep(0,0); setIsActive(!isActive); }} className="w-24 h-24 bg-white rounded-full flex items-center justify-center text-slate-900 shadow-2xl">
+                                {isActive ? <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg> : <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" className="ml-1"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>}
+                            </button>
+                            <button onClick={() => setTotalSeconds(Math.min(info.end, TOTAL_DURATION))} className="text-white opacity-80 hover:opacity-100">
+                                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+                            </button>
+                        </div>
+                        <button onClick={() => {setIsActive(false); setTotalSeconds(0);}} className="absolute bottom-6 right-6 text-white/40 hover:text-white"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M3 22v-6h6"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg></button>
+                    </div>
+                </div>
+            );
+        };
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
